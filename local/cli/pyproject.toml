@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ob1-local"
+version = "0.1.0"
+description = "Local Open Brain CLI — Postgres+pgvector, Ollama embeddings, no MCP required."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "FSL-1.1-MIT" }
+dependencies = [
+  "psycopg[binary]>=3.1",
+  "requests>=2.31",
+]
+
+[project.scripts]
+ob1 = "ob1.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
