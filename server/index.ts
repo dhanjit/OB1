@@ -220,16 +220,17 @@ server.registerTool(
       query: z.string().describe("What to search for"),
       limit: z.number().optional().default(10),
       threshold: z.number().optional().default(0.5),
+      source: z.string().optional().describe("Filter by metadata source (e.g. 'obsidian', 'mcp')"),
     },
   },
-  async ({ query, limit, threshold }) => {
+  async ({ query, limit, threshold, source }) => {
     try {
       const qEmb = await getEmbedding(query);
       const { data, error } = await supabase.rpc("match_thoughts", {
         query_embedding: qEmb,
         match_threshold: threshold,
         match_count: limit,
-        filter: {},
+        filter: source ? { source } : {},
       });
 
       if (error) {
@@ -290,7 +291,7 @@ server.registerTool(
   {
     title: "List Recent Thoughts",
     description:
-      "List recently captured thoughts with optional filters by type, topic, person, or time range.",
+      "List recently captured thoughts with optional filters by type, topic, person, source, or time range (relative days or absolute dates).",
     annotations: {
       readOnlyHint: true,
     },
@@ -300,9 +301,14 @@ server.registerTool(
       topic: z.string().optional().describe("Filter by topic tag"),
       person: z.string().optional().describe("Filter by person mentioned"),
       days: z.number().optional().describe("Only thoughts from the last N days"),
+      source: z.string().optional().describe("Filter by metadata source (e.g. 'obsidian', 'mcp')"),
+      date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").optional()
+        .describe("Only thoughts on or after this date (YYYY-MM-DD)"),
+      date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").optional()
+        .describe("Only thoughts on or before this date (YYYY-MM-DD, inclusive of the full day)"),
     },
   },
-  async ({ limit, type, topic, person, days }) => {
+  async ({ limit, type, topic, person, days, source, date_from, date_to }) => {
     try {
       let q = supabase
         .from("thoughts")
@@ -313,10 +319,18 @@ server.registerTool(
       if (type) q = q.contains("metadata", { type });
       if (topic) q = q.contains("metadata", { topics: [topic] });
       if (person) q = q.contains("metadata", { people: [person] });
+      if (source) q = q.contains("metadata", { source });
       if (days) {
         const since = new Date();
         since.setDate(since.getDate() - days);
         q = q.gte("created_at", since.toISOString());
+      }
+      if (date_from) q = q.gte("created_at", `${date_from}T00:00:00Z`);
+      if (date_to) {
+        // Inclusive full-day semantics: < (date_to + 1 day)
+        const next = new Date(`${date_to}T00:00:00Z`);
+        next.setUTCDate(next.getUTCDate() + 1);
+        q = q.lt("created_at", next.toISOString());
       }
 
       const { data, error } = await q;
@@ -365,22 +379,28 @@ server.registerTool(
   "thought_stats",
   {
     title: "Thought Statistics",
-    description: "Get a summary of all captured thoughts: totals, types, top topics, and people.",
+    description: "Get a summary of all captured thoughts: totals, types, top topics, and people. Optionally scoped to a single source.",
     annotations: {
       readOnlyHint: true,
     },
-    inputSchema: {},
+    inputSchema: {
+      source: z.string().optional().describe("Scope stats to one metadata source (e.g. 'obsidian', 'mcp')"),
+    },
   },
-  async () => {
+  async ({ source }) => {
     try {
-      const { count } = await supabase
+      let countQuery = supabase
         .from("thoughts")
         .select("*", { count: "exact", head: true });
+      if (source) countQuery = countQuery.contains("metadata", { source });
+      const { count } = await countQuery;
 
-      const { data } = await supabase
+      let dataQuery = supabase
         .from("thoughts")
         .select("metadata, created_at")
         .order("created_at", { ascending: false });
+      if (source) dataQuery = dataQuery.contains("metadata", { source });
+      const { data } = await dataQuery;
 
       const types: Record<string, number> = {};
       const topics: Record<string, number> = {};
